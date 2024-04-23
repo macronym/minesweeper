@@ -5,6 +5,9 @@
 #include "board.h"
 #include "textures.h"
 #include <cmath>
+#include <chrono>
+#include <fstream>
+#include <sstream>
 
 using namespace std;
 
@@ -67,7 +70,7 @@ public:
         welcomeBackground.setFillColor(color);
     }
 
-    int setWelcomeText(int width, int height) {
+    void setWelcomeText(int width, int height) {
         // Text that greets the user
         welcomeText.setFont(font);
         welcomeText.setString("WELCOME TO MINESWEEPER!");
@@ -133,7 +136,7 @@ public:
         setText(userNameField, (float)_width / 2, (float)(_height / 2 - 45)); // NOLINT(*-integer-division)
     }
 
-    // Gets the username
+    // Draws
     void drawToScreen(sf::RenderWindow& window) {
         window.draw(welcomeBackground);
         window.draw(welcomeText);
@@ -154,6 +157,7 @@ public:
 
 class GameScreen {
 public:
+    string name;
     bool active = false;
     int _width;
     int _height;
@@ -168,11 +172,34 @@ public:
     bool gameLost = false;
     bool gameWon = false;
     bool debugMode = false;
+    bool isNewGame = true;
+    bool leaderboardShownAtEndGame = false;
+    bool isTopFive = false;
+    int newRank = 100;
 
+    // Counter attributes
     int _flagCounter;
     vector<sf::Sprite> mineCounterSprites;     // The counter shows number of "mines" (actually flags placed).
     vector<int> mineCountDigits;        // The digits for the mines
     sf::Sprite negativeSprite;          // Holds the negative sprite, if it exists.
+
+    // Timer attributes
+    bool isPaused = true;
+    vector<sf::Sprite> minutes;         // The minutes digits of the timer
+    vector<sf::Sprite> seconds;         // The seconds digits of the timer
+    vector<int> minutesDigits;
+    vector<int> secondDigits;
+    chrono::duration<double> totalDuration;
+    chrono::high_resolution_clock::time_point lastFrameTime;     // Stores the start time of the clock
+
+    // Play/Pause Button
+    sf::Sprite pauseButton;
+
+    // Pause Board
+    vector<vector<sf::Sprite>> pauseTilesSprites;
+
+    // Leaderboard button
+    sf::Sprite leaderButton;
 
     // Construct the game screen (including the board).
     GameScreen(sf::RenderWindow& window, int width, int height, int numRows, int numCols, int mines, map<string, sf::Texture>& textures) : board(numRows, numCols, mines, textures) {
@@ -183,10 +210,24 @@ public:
         _numMines = mines;
         _flagCounter = mines;
         gameTextures = textures;
-        createGameScreen();
 
         // Offset the sprites by designated amount such that the board is displayed in a grid
-        setAllBaseSpritesPositions();
+        setAllBaseSpritesPositions(board.baseSprites2D);
+
+        // Initialize a pause board
+        for (int i = 0; i < _numRows; i++) {
+            vector<sf::Sprite> spriteRow;
+            for (int j = 0; j < _numCols; j++) {
+                // Initializes all tiles to hidden.
+                sf::Sprite sprite;
+                sprite.setTexture(gameTextures["tile_revealed"]);
+                spriteRow.push_back(sprite);
+            }
+            pauseTilesSprites.push_back(spriteRow);
+        }
+
+        setGameBackground(_width, _height, sf::Color::White);
+        setAllBaseSpritesPositions(pauseTilesSprites);
 
         // Create the Happy Face Button
         happyFaceButton.setTexture(gameTextures["face_happy"]);
@@ -221,47 +262,88 @@ public:
             startingPixel += 21;    // Each subsequent digit is 21 pixels further to the right.
         }
 
-    }
+        // Create the timer with default digits 0
+        for (int i = 0; i < 2; i++) {
+            sf::Sprite minutesDigitSprite;
+            minutes.push_back(minutesDigitSprite);
+            minutes[i].setTexture(gameTextures["digits"]);
+            minutes[i].setPosition((float)((_numCols * 32) - 97 + (i * 21)), (float)((_numRows + 0.5) * 32) + 16);
+            minutes[i].setTextureRect(sf::IntRect (0, 0, 21, 32));
+        }
+        for (int i = 0; i < 2; i++) {
+            sf::Sprite secondDigitsSprite;
+            seconds.push_back(secondDigitsSprite);
+            seconds[i].setTexture(gameTextures["digits"]);
+            seconds[i].setPosition((float)((_numCols * 32) - 54 + (i * 21)), (float)((_numRows + 0.5) * 32) + 16);
+            seconds[i].setTextureRect(sf::IntRect (0, 0, 21, 32));
+        }
 
-    void createGameScreen() {
-        // Testing
-        setGameBackground(_width, _height, sf::Color::White);
+        // Create the Pause/Play Button
+        pauseButton.setTexture(gameTextures["pause"]);
+        pauseButton.setPosition((float)(_numCols * 32) - 240, (float)(_numRows + 0.5) * 32);
+
+        // Create the leaderboard button
+        leaderButton.setTexture(gameTextures["leaderboard"]);
+        leaderButton.setPosition((_numCols * 32) - 176, 32 * (_numRows + 0.5));
     }
 
     void setGameBackground(int width, int height, sf::Color color) {
-        // Testing
         gameBackground.setSize(sf::Vector2f((float)width, (float)height));
         gameBackground.setFillColor(color);
     }
 
+    // Gets duration of the game in seconds
+    void pause() {
+        isPaused = true;
+    }
+
+    void unpause() {
+        isPaused = false;
+        lastFrameTime = chrono::high_resolution_clock::now();
+    }
+
     // Gets the username
     void drawToScreen(sf::RenderWindow& window) {
+
+        // The default background
         window.draw(gameBackground);
 
-        // Draw all the sprites
-        for (int row = 0; row < _numRows; row++) {
-            for (int col = 0; col < _numCols; col++) {
-                // Draw base sprites
-                window.draw(board.baseSprites2D[row][col]);
-                // Draw any necessary flags
-                if (board.tiles2D[row][col]->flagged) {
-                    window.draw(board.flagSprites2D[row][col]);
+        // As long as the game is not paused, draw the board
+        if (!isPaused || (gameWon || gameLost) || isNewGame) {
+            // Draw all the sprites
+            for (int row = 0; row < _numRows; row++) {
+                for (int col = 0; col < _numCols; col++) {
+                    // Draw base sprites
+                    window.draw(board.baseSprites2D[row][col]);
+                    // Draw any necessary flags
+                    if (board.tiles2D[row][col]->flagged) {
+                        window.draw(board.flagSprites2D[row][col]);
+                    }
+                    // Draw the numbers if they exist
+                    if (board.tiles2D[row][col]->revealed && !board.tiles2D[row][col]->mined && board.tiles2D[row][col]->adjacentMineCount > 0) {
+                        setNumberSpritesPosition(row, col);
+                        window.draw(board.numberSprites2D[row][col]);
+                    }
+                    // If the game is over, draw all mines and change the face button
+                    if (gameLost && board.tiles2D[row][col]->mined) {
+                        setMinesSpritesPosition(row, col);
+                        window.draw(board.mineSprites2D[row][col]);
+                        changeFaceSprite();
+                    }
+                    // If debug mode is on draw the mine sprites.
+                    else if (debugMode && !gameWon && board.tiles2D[row][col]->mined){
+                        setMinesSpritesPosition(row, col);
+                        window.draw(board.mineSprites2D[row][col]);
+                    }
                 }
-                // Draw the numbers if they exist
-                if (board.tiles2D[row][col]->revealed && !board.tiles2D[row][col]->mined && board.tiles2D[row][col]->adjacentMineCount > 0) {
-                    setNumberSpritesPosition(row, col);
-                    window.draw(board.numberSprites2D[row][col]);
-                }
-                // If the game is over, draw all mines and change the face button
-                if (gameLost && board.tiles2D[row][col]->mined) {
-                    setMinesSpritesPosition(row, col);
-                    window.draw(board.mineSprites2D[row][col]);
-                    changeFaceSprite();
-                }
-                // If debug mode is on draw the mine sprites.
-                else if (debugMode && !gameWon && board.tiles2D[row][col]->mined){
-                    setMinesSpritesPosition(row, col);
-                    window.draw(board.mineSprites2D[row][col]);
+            }
+        }
+        // If game is paused, draw a board with all hidden tiles (not the same board)
+        else {
+            for (int row = 0; row < _numRows; row++) {
+                for (int col = 0; col < _numCols; col++) {
+                    // Draw pause board
+                    window.draw(pauseTilesSprites[row][col]);
                 }
             }
         }
@@ -280,6 +362,23 @@ public:
             }
         }
 
+        if (!isPaused) {
+            updateTimer();
+        }
+
+        // Draw the timer
+        for (const auto& digit : minutes) {
+            window.draw(digit);
+        }
+        for (const auto& digit : seconds) {
+            window.draw(digit);
+        }
+
+        // Draw the pause button
+        window.draw(pauseButton);
+
+        // Draw the leaderboard button
+        window.draw(leaderButton);
     }
 
     void leftClickAction(int mouseX, int mouseY) {
@@ -296,6 +395,16 @@ public:
 
         // Left clicks within the tiles
         if (mouseY < _height - 100) {
+            // If it's a new game and the game is not paused, it must be the first click. This starts the timer.
+            if (isNewGame && isPaused) {
+                unpause();
+                isNewGame = false;
+            }
+            // Cannot click the board at all if the game is paused.
+            else if (!isNewGame && isPaused) {
+                return;
+            }
+
             // Reveal a hidden tile
             Tile* tile = board.tiles2D[row][col];
 
@@ -306,6 +415,7 @@ public:
                     gameLost = true;
                     revealAllMines();
                     tile->revealed = true;
+                    pause();
                 }
                 // Otherwise reveal all non-mine tiles if clicked on a tile with no adjacent mines.
                 else if (tile->adjacentMineCount == 0) {
@@ -330,7 +440,11 @@ public:
         if ((board.nonMinesRevealed == (_numRows * _numCols) - board._mines) && (board._mines == board.minesFlagged)){
             gameWon = true;
             changeFaceSprite();
+            pause();
+            storeResult(minutesDigits, secondDigits);       // Stores the final result in leaderboards
         }
+
+
     }
 
     // Change every tile with a mine on it to be revealed. Used at end-game if the user lost.
@@ -341,9 +455,6 @@ public:
                 // If the game is lost, reveal that tile if it has a mine on it.
                 if (gameLost && board.tiles2D[i][j] != nullptr && board.tiles2D[i][j]->mined) {
                     changeBaseSprite("tile_revealed", i, j);
-                }
-                else if (debugMode && board.tiles2D[i][j] != nullptr && board.tiles2D[i][j]->mined) {
-
                 }
             }
         }
@@ -381,7 +492,6 @@ public:
         }
 
         if (!tile->flagged && !tile->revealed && (hasEmptyAdjacent || tile->adjacentMineCount == 0)) {
-            cout << "Row: " << row << " Col: " << col << endl;
             changeBaseSprite("tile_revealed", row, col);
             tile->revealed = true;
             board.nonMinesRevealed++;
@@ -404,8 +514,8 @@ public:
     // Does an action depending on where right-clicking
     void rightClickAction(int mouseX, int mouseY) {
 
-        // Cannot click if the game is over
-        if (gameLost || gameWon) {
+        // Cannot click if the game is over or paused
+        if (gameLost || gameWon || isPaused) {
             return;
         }
 
@@ -467,6 +577,82 @@ public:
         }
     }
 
+    // Switches between pause/play
+    void togglePause() {
+        // Cannot toggle when the game is over.
+        if (gameLost || gameWon) {
+            return;
+        }
+        else if (isPaused) {
+            unpause();
+        }
+        else {
+            pause();
+        }
+
+        changePauseSprite();
+    }
+
+    // Change the pause button sprite depending on current state.
+    void changePauseSprite() {
+        if (isPaused) {
+            pauseButton.setTexture(gameTextures["play"]);
+        }
+        else {
+            pauseButton.setTexture(gameTextures["pause"]);
+        }
+    }
+
+    void updateTimer() {
+        // Resets the timer to 0 if the game was reset
+        if (isNewGame) {
+            totalDuration = chrono::duration<double>(0);
+        }
+        // Updates the timer if active and not paused.
+        else {
+            auto now = chrono::high_resolution_clock::now();
+            totalDuration = totalDuration + now - lastFrameTime;
+            lastFrameTime = now;
+        }
+
+        // Start with fresh vectors
+        minutes.clear();
+        seconds.clear();
+
+        // Get the digits for the seconds and minutes.
+        int numMin = (int)floor(totalDuration.count()) / 60;    // Gets number of minutes elapsed
+        int numSec = (int)floor(totalDuration.count()) % 60;    // Gets number of seconds elapsed
+
+        // Get the digits for the minutes and seconds
+        int tempMinuteDigits = numMin;
+        int tempSecondsDigits = numSec;
+        for (int i = 0; i < 2; i++) {
+            int minDigit = tempMinuteDigits % 10;     // Gets the last digit of minutes
+            minutesDigits.insert(minutesDigits.begin(), minDigit);     // Inserts into the beginning
+            tempMinuteDigits /= 10; // Update temp mine digits
+
+            int secDigit = tempSecondsDigits % 10;     // Gets the last digit of seconds
+            secondDigits.insert(secondDigits.begin(), secDigit);     // Inserts into the beginning
+            tempSecondsDigits /= 10;
+        }
+
+        // Set the digit sprites based on the minutes and seconds.
+        for (int i = 0; i < 2; i++) {
+            sf::Sprite minutesDigitSprite;
+            minutes.push_back(minutesDigitSprite);
+            minutes[i].setTexture(gameTextures["digits"]);
+            minutes[i].setPosition((float)((_numCols * 32) - 97 + (i * 21)), (float)((_numRows + 0.5) * 32) + 16);
+            minutes[i].setTextureRect(sf::IntRect (minutesDigits[i] * 21, 0, 21, 32));
+        }
+        for (int i = 0; i < 2; i++) {
+            sf::Sprite secondDigitsSprite;
+            seconds.push_back(secondDigitsSprite);
+            seconds[i].setTexture(gameTextures["digits"]);
+            seconds[i].setPosition((float)((_numCols * 32) - 54 + (i * 21)), (float)((_numRows + 0.5) * 32) + 16);
+            seconds[i].setTextureRect(sf::IntRect (secondDigits[i] * 21, 0, 21, 32));
+        }
+    }
+
     // Update mineCounterSprites;
     void updateMineCounter() {
 
@@ -496,10 +682,10 @@ public:
 
     }
 
-    void setAllBaseSpritesPositions() {
+    void setAllBaseSpritesPositions(vector<vector<sf::Sprite>>& tiles) const {
         for (int row = 0; row < _numRows; row++) {
             for (int col = 0; col < _numCols; col++) {
-                board.baseSprites2D[row][col].setPosition((float)(32 * col), (float)(32 * row));
+                tiles[row][col].setPosition((float)(32 * col), (float)(32 * row));
             }
         }
     }
@@ -528,15 +714,98 @@ public:
         active = false;
     }
 
+    void storeResult(vector<int> finalMinutes, vector<int> finalSeconds) {
+        // Opens file in read mode
+        ifstream infile("files/leaderboard.txt");
+        if (!infile) {
+            cout << "Error: leaderboard.txt cannot open in read mode." << endl;
+        }
+
+        // Store all the previous scores, temporarily because the file will be overwritten
+        vector<string> oldRecords;
+        string line;
+        while (getline(infile, line)) {
+            oldRecords.push_back(line);
+        }
+        infile.close();
+        
+        // From the temporarily stored scores, get only the score part
+        vector<string> oldScores;
+        for (const string& record : oldRecords) {
+            oldScores.push_back(record.substr(0, 5));
+        }
+
+        // Create the new score to be stored
+        // Convert time to string form
+        ostringstream stream;
+        stream << finalMinutes[0];
+        stream << finalMinutes[1] << ":";
+        stream << finalSeconds[0];
+        stream << finalSeconds[1];
+        string finalTime = stream.str();
+        string newName = name.substr(0, name.size() - 1);       // Ignore the pipe '|' symbol.
+        string newRecord = finalTime + ", " + newName;       // The new score that will be stored on the leaderboard
+
+
+        // Store the current score in the right location
+        for (int i = 0; i < oldScores.size(); i++) {
+            // If the records match one that already exists, return to avoid duplication.
+            if (newRecord == oldRecords[i]) {
+                return;
+            }
+
+            if ((finalTime <= oldScores[i]) && i <= 5) {
+                // Insert into the index
+                oldRecords.insert(oldRecords.begin() + i, newRecord);
+                isTopFive = true;
+                newRank = i;
+                break;
+            }
+        }
+
+        // Write back the top 5 scores
+        ofstream outfile("files/leaderboard.txt");
+        if (!outfile) {
+            cout << "Error: leaderboard.txt cannot open in write mode." << endl;
+        }
+        for (int i = 0; i < oldRecords.size(); i++) {
+          // Only store top 5
+          if (i > 4) {
+              break;
+          }
+          outfile << oldRecords[i] << "\n";
+        }
+        outfile.close();
+    }
+
     void reset() {
-        board.eraseTiles();
         gameLost = false;
         gameWon = false;
+        isNewGame = true;
+        isPaused = true;
+        isTopFive = false;
+        newRank = 100;
+        leaderboardShownAtEndGame = false;
+
+        // Recreate the tiles
+        board.eraseTiles();
         board = Board(_numRows, _numCols, _numMines, gameTextures);
-        setAllBaseSpritesPositions();
+        setAllBaseSpritesPositions(board.baseSprites2D);
+
+        // Reset the face button
         changeFaceSprite();
+
+        // Turns off debug mode if it's on
         if (debugMode) {
-            toggleDebugMode();
+            debugMode = false;
         }
+
+        // Resets the mine counter
+        _flagCounter = _numMines;
+        updateMineCounter();
+
+        // Reset the timer
+        updateTimer();
+
     }
 };
