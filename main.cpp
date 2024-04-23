@@ -124,7 +124,6 @@ int main() {
                         // Left-clicks on the board
                         gameScreen.leftClickAction(mouseX, mouseY);
                     }
-
                 }
                 // Right-clicks
                 else if (event.type == sf::Event::MouseButtonPressed && event.mouseButton.button == sf::Mouse::Right) {

@@ -417,15 +417,18 @@ public:
                     tile->revealed = true;
                     pause();
                 }
-                // Otherwise reveal all non-mine tiles if clicked on a tile with no adjacent mines.
-                else if (tile->adjacentMineCount == 0) {
-                    floodFillReveal(row, col);
-                }
-                // Otherwise reveal the tile with a mineCount
-                else if (tile->adjacentMineCount > 0) {
-                    changeBaseSprite("tile_revealed", row, col);
-                    tile->revealed = true;
-                    board.nonMinesRevealed++;
+                // Reveal tiles as long as they haven't already been revealed.
+                if (!tile->revealed) {
+                    // Otherwise reveal all non-mine tiles if clicked on a tile with no adjacent mines.
+                    if (tile->adjacentMineCount == 0) {
+                        floodFillReveal(row, col);
+                    }
+                    // Otherwise reveal the tile with a mineCount
+                    else if (tile->adjacentMineCount > 0) {
+                        changeBaseSprite("tile_revealed", row, col);
+                        tile->revealed = true;
+                        board.nonMinesRevealed++;
+                    }
                 }
             }
 
