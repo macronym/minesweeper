@@ -114,9 +114,6 @@ public:
         }
         name += "|";
 
-        // Testing
-        cout << name << endl;
-
         // Sets the new string.
         userNameField.setString(name);
         setText(userNameField, (float)_width / 2, (float)(_height / 2 - 45)); // NOLINT(*-integer-division)
@@ -383,6 +380,7 @@ public:
 
     void leftClickAction(int mouseX, int mouseY) {
         // Do an action depending on the location of the click
+        updateTimer();      // Ensure the there is actually an elapsed time if the user won on the first click.
 
         // Cannot click if the game is over
         if (gameLost || gameWon) {
@@ -440,14 +438,36 @@ public:
     void checkForEndGame() {
         // Check if all non-mine tiles have been revealed and all mine tiles have been flagged
         // and if so, the game is won.
-        if ((board.nonMinesRevealed == (_numRows * _numCols) - board._mines) && (board._mines == board.minesFlagged)){
+//        if ((board.nonMinesRevealed == (_numRows * _numCols) - board._mines) && (board._mines == board.minesFlagged)){
+//            gameWon = true;
+//            changeFaceSprite();
+//            pause();
+//            storeResult(minutesDigits, secondDigits);       // Stores the final result in leaderboards
+//            flagAllMines();
+//        }
+
+        if ((board.nonMinesRevealed == (_numRows * _numCols) - board._mines)){
             gameWon = true;
             changeFaceSprite();
             pause();
             storeResult(minutesDigits, secondDigits);       // Stores the final result in leaderboards
+            flagAllMines();
         }
+    }
 
-
+    // Loops through the board and flags every mine
+    void flagAllMines() {
+        for (int row = 0; row < board.tiles2D.size(); row++) {
+            for (int col = 0; col < board.tiles2D[0].size(); col++) {
+                if (board.tiles2D[row][col]->mined && !board.tiles2D[row][col]->flagged) {
+                    board.tiles2D[row][col]->flagged = true;
+                    sf::Sprite sprite;
+                    sprite.setTexture(gameTextures["flag"]);
+                    board.flagSprites2D[row][col] = sprite;
+                    setFlagSpritePosition(row, col);
+                }
+            }
+        }
     }
 
     // Change every tile with a mine on it to be revealed. Used at end-game if the user lost.
